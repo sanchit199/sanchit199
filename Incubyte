@@ -1,0 +1,78 @@
+from pyspark.sql.types import structType,structField,IntegerType,StringType
+schema_AUS = structType(fields=[
+    structField("Unique ID",IntegerType(),False),
+    structField("Patient Name",StringType(),True),
+    structField("Vaccine Type",StringType(),True),
+    structField("Date of Birth",StringType(),True),
+    structField("Date of Vaccination",StringType(),True),
+    structField("corrupt_record",StringType(),True)
+])
+
+from pyspark.sql.types import structType,structField,IntegerType,StringType
+schema_IND = structType(fields=[
+    structField("ID",IntegerType(),False),
+    structField("Name",StringType(),True),
+    structField("VaccineType",StringType(),True),
+    structField("VaccinationDate",StringType(),True),
+    structField("Free or Paid",StringType(),True),
+    structField("corrupt_record",StringType(),True)
+])
+
+from pyspark.sql.types import structType,structField,IntegerType,StringType
+schema_USA = structType(fields=[
+    structField("ID",IntegerType(),False),
+    structField("Name",StringType(),True),
+    structField("VaccineType",StringType(),True),
+    structField("VaccinationDate",StringType(),True),
+    structField("corrupt_record",StringType(),True)
+])
+
+raw_AUS_df= spark.read.option("mode","PERMISSIVE").csv("dbfs:/mnt/testproject1234/testcontainer/AUS.csv",header = True,schema=schema_AUS)
+raw_USA_df= spark.read.option("mode","PERMISSIVE").csv("dbfs:/mnt/testproject1234/testcontainer/USA.csv",header = True,schema=schema_USA)
+raw_IND_df= spark.read.option("mode","PERMISSIVE").csv("dbfs:/mnt/testproject1234/testcontainer/IND.csv",header = True,schema=schema_IND)
+
+from pyspark.sql.functions import lit,ltrim,col,regexp_replace
+filtered_AUS_df = raw_AUS_df.select(col("Unique ID").cast('int') ,ltrim(regexp_replace("Patient Name",',','')).alias("Patient Name"),\
+                                    "Vaccine Type")\
+				.withColumn("Total_Population",lit(10)).withColumn("Country",lit("Australia")).withColumn("IsVaccinated",lit(1))
+
+
+filtered_IND_df = raw_IND_df.select(col("ID").cast('int').alias("Unique ID") ,ltrim(regexp_replace("Name",',','')).alias("Patient Name")\
+                                    .alias("Patient Name"),col("VaccinationType").alias("Vaccine Type"))\
+				.withColumn("Total_Population",lit(10)).withColumn("Country",lit("INDIA")).withColumn("IsVaccinated",lit(1))
+
+
+filtered_USA_df = raw_USA_df.select(col("ID").cast('int').alias("Unique ID") ,ltrim(regexp_replace("Name",',','')).alias("Patient Name")\
+                                    .alias("Patient Name"),col("VaccinationType").alias("Vaccine Type"))\
+				.withColumn("Total_Population",lit(10)).withColumn("Country",lit("USA")).withColumn("IsVaccinated",lit(1))
+
+
+AUS_IND_df = filtered_AUS_df.union(filtered_IND_df)
+AllCountry_df = AUS_IND_df.union(filtered_USA_df)
+display(AllCountry_df)
+AllCountry_df.createOrReplaceTempView("AllCountry_view")
+
+#Metric1
+Metric1_df = spark.sql("""SELECT Country,`Vaccine Type` as Vaccine_Type,COUNT(*) `No_of_Vaccination` \
+                        FROM AllCountry_view\
+                        GROUP BY Country,`Vaccine Type`;""")
+	
+Metric1_df.show(10)
+Metric1_df.write.format("Delta").save("dbfs:/mnt/testproject1234/testcontainer/Output/Metric1", mode="overwrite")
+
+#Metric2
+Metric2_df = spark.sql("""SELECT Country,(COUNT(*)/Total_Population)*100 AS `%Vaccinated`
+	FROM AllCountry_view
+	GROUP BY Country,Total_Population;""")
+	
+Metric2_df.show(10)
+#Metric2_df.write.format("Delta").save("path", mode="overwrite")
+
+Total_Count = AllCountry_df.where("IsVaccinated==1").count()
+
+#Metric3
+Metric3_df = spark.sql(f"""
+	SELECT Country,Cast((COUNT(*)/{Total_Count})*100 as DECIMAL(10,2)) AS Per_Country_Contribution FROM AllCountry_view
+    GROUP BY Country;""")
+	
+Metric3_df.show(10)
